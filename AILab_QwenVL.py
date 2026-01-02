@@ -428,15 +428,36 @@ class QwenVLBase:
             "pad_token_id": self.tokenizer.pad_token_id,
         }
         if num_beams == 1:
+            # Enable sampling for streaming
             kwargs.update({"do_sample": True, "temperature": temperature, "top_p": top_p})
+            
+            # Streaming implementation
+            streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+            kwargs["streamer"] = streamer
+            
+            # Create a thread to run the generation to avoid blocking the iterator
+            generation_kwargs = dict(**model_inputs, **kwargs)
+            thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
+            thread.start()
+            
+            print("\n[QwenVL Stream] Generating: ", end="", flush=True)
+            generated_text = ""
+            for new_text in streamer:
+                print(new_text, end="", flush=True)
+                generated_text += new_text
+            print("") # Newline after generation matches
+            
+            thread.join()
+            return generated_text.strip()
         else:
+            # Original Logic for Beam Search (Streaming not supported)
             kwargs["do_sample"] = False
-        outputs = self.model.generate(**model_inputs, **kwargs)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        input_len = model_inputs["input_ids"].shape[-1]
-        text = self.tokenizer.decode(outputs[0, input_len:], skip_special_tokens=True)
-        return text.strip()
+            outputs = self.model.generate(**model_inputs, **kwargs)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            input_len = model_inputs["input_ids"].shape[-1]
+            text = self.tokenizer.decode(outputs[0, input_len:], skip_special_tokens=True)
+            return text.strip()
 
     def run(self, model_name, quantization, preset_prompt, custom_prompt, image, video, frame_count, max_tokens, temperature, top_p, num_beams, repetition_penalty, seed, keep_model_loaded, attention_mode, use_torch_compile, device):
         torch.manual_seed(seed)
